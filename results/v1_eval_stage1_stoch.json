@@ -1,0 +1,17 @@
+[
+  {
+    "size": 5,
+    "model": "ppo_cpp_5_3_100_500000_20260430_083902_stage1.zip",
+    "episodes": 100,
+    "deterministic": false,
+    "full_coverage_rate_pct": 94.0,
+    "coverage_mean_pct": 99.31818181818183,
+    "coverage_std_pct": 3.6006771631261043,
+    "coverage_min_pct": 68.18181818181817,
+    "coverage_max_pct": 100.0,
+    "steps_mean": 41.03,
+    "steps_std": 18.388287032782582,
+    "steps_min": 25,
+    "steps_max": 100
+  }
+]
