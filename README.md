@@ -10,9 +10,9 @@ APS final de Reinforcement Learning (Insper, 10º semestre, prof. Fabrício Bart
 
 | Tamanho | Full coverage | Cobertura média |
 |---|---|---|
-| 5×5 | **96.0 %** | 99.68 % |
-| 10×10 | **92.0 %** | **99.89 %** |
-| 20×20 (bônus) | **80.0 %** | **99.88 %** |
+| 5×5 | **95.0 %** | 99.41 % |
+| 10×10 | **91.0 %** | 99.86 % |
+| 20×20 (bônus) | **80.0 %** | **99.93 %** |
 
 ## Estrutura
 

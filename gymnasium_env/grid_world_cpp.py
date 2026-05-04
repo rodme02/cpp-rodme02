@@ -8,6 +8,12 @@ import pygame
 
 # Coverage Path Planning environment.
 #
+# Visibilidade parcial: o agente só vê o que está dentro da janela KxK ao redor
+# dele e o que ele já viu antes (memória persistente). Em particular, todos os
+# cálculos derivados (frontier BFS, global_map) usam APENAS o conjunto
+# ``_seen_obstacles`` — obstáculos que entraram na janela do agente em algum
+# step anterior — nunca o conjunto completo de obstáculos do grid.
+#
 # Observation (Dict, todos com shape fixo independente do tamanho do grid):
 #   local_map  (3, 7, 7)   — janela egocêntrica one-hot: obstáculo/visitada/livre
 #   global_map (2, 8, 8)   — memória pooleada: visitadas (max-pool) + posição do agente
@@ -108,8 +114,12 @@ class GridWorldCPPEnv(gym.Env):
         self.window = None
         self.clock = None
 
-        # Pre-compute an obstacles set for O(1) membership tests in step().
+        # Conjunto completo de obstáculos (usado só pela física do step e pelo
+        # render — nunca pela observação ou pelo BFS).
         self._obstacles_set: set = set()
+        # Obstáculos que o agente JÁ viu (entraram na janela KxK em algum step).
+        # Único conjunto consultado por _build_local_map e _compute_frontier_info.
+        self._seen_obstacles: set = set()
 
     @property
     def total_free_cells(self) -> int:
@@ -119,26 +129,40 @@ class GridWorldCPPEnv(gym.Env):
     def coverage_ratio(self) -> float:
         return len(self.visited) / self.total_free_cells if self.total_free_cells > 0 else 1.0
 
+    def _update_seen_obstacles(self) -> None:
+        """Adiciona ao ``_seen_obstacles`` todos os obstáculos dentro da janela
+        KxK ao redor do agente. Chamado em ``reset`` e após cada movimento.
+
+        É a única forma do agente "descobrir" obstáculos — antes de entrarem na
+        janela em algum step, eles ficam ocultos para tudo que deriva da
+        observação (BFS de fronteira, etc.).
+        """
+        r = self.window_radius
+        ax, ay = int(self._agent_location[0]), int(self._agent_location[1])
+        for di in range(-r, r + 1):
+            for dj in range(-r, r + 1):
+                gx, gy = ax + dj, ay + di
+                if 0 <= gx < self.size and 0 <= gy < self.size and \
+                        (gx, gy) in self._obstacles_set:
+                    self._seen_obstacles.add((gx, gy))
+
     def _compute_frontier_info(self) -> Tuple[float, float, float, float]:
-        """BFS from the agent to the nearest **frontier** cell.
+        """BFS do agente até a célula de **fronteira** mais próxima.
 
-        A frontier cell is an unvisited free cell that has at least one
-        visited neighbor — exactly the cells the agent should head toward
-        if it wants to expand its known region. BFS proceeds over free
-        cells (visited cells are traversable; obstacles are blocked).
+        Fronteira = célula livre não-visitada com pelo menos um vizinho
+        visitado. A BFS expande sobre o "terreno conhecido" do agente:
+        bloqueia apenas em obstáculos que o agente JÁ viu (``_seen_obstacles``).
+        Células nunca observadas são tratadas como potencialmente livres
+        (otimismo sob incerteza) — exatamente o que o enunciado exige ao
+        proibir acesso ao mapa completo.
 
-        Returns ``(dx_norm, dy_norm, dist_norm, dist_raw)``:
-          - ``dx_norm``, ``dy_norm``: signed offsets to the target,
-            normalized by ``size`` and clamped to [-1, 1].
-          - ``dist_norm``: BFS distance, normalized by 2*size, clamped to 1.
-          - ``dist_raw``: raw BFS distance in cells; ``inf`` if no frontier
-            is reachable (full coverage or fully isolated).
+        Retorna ``(dx_norm, dy_norm, dist_norm, dist_raw)``.
         """
         if len(self.visited) >= self.total_free_cells:
             return 0.0, 0.0, 0.0, float("inf")
 
         size = self.size
-        obstacles = self._obstacles_set
+        seen_obstacles = self._seen_obstacles  # Apenas obstáculos vistos.
         visited = self.visited
 
         ax, ay = int(self._agent_location[0]), int(self._agent_location[1])
@@ -149,13 +173,10 @@ class GridWorldCPPEnv(gym.Env):
 
         target = None
         target_dist = 0
-        # Adjacent visited cell makes the current cell a frontier (must also
-        # be free and unvisited itself). We expand BFS over free terrain.
         while queue:
             cx, cy, d = queue.popleft()
 
-            if (cx, cy) not in visited and (cx, cy) not in obstacles:
-                # Frontier check: any of its 4-neighbors is in visited?
+            if (cx, cy) not in visited and (cx, cy) not in seen_obstacles:
                 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     if (cx + dx, cy + dy) in visited:
                         target = (cx, cy)
@@ -167,7 +188,7 @@ class GridWorldCPPEnv(gym.Env):
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nx, ny = cx + dx, cy + dy
                 if (0 <= nx < size and 0 <= ny < size
-                        and (nx, ny) not in obstacles
+                        and (nx, ny) not in seen_obstacles
                         and (nx, ny) not in seen):
                     seen.add((nx, ny))
                     queue.append((nx, ny, d + 1))
@@ -221,12 +242,15 @@ class GridWorldCPPEnv(gym.Env):
         return out
 
     def _build_local_map(self) -> np.ndarray:
-        """Egocentric KxK one-hot tensor centered on the agent.
+        """Tensor egocêntrico KxK one-hot centrado no agente.
 
-        Out-of-bounds cells are encoded as obstacles (channel 0 = 1). Inside
-        the grid, exactly one channel is 1 per cell — this provides a clean
-        signal for the CNN and avoids the value-overloading issue of the
-        previous {0, 1, 2} encoding.
+        Out-of-bounds vira canal 0 (obstáculo). Dentro do grid, exatamente um
+        canal é 1 por célula — encoding linearmente separável para a CNN.
+        Obstáculos são lidos do mapa real (``_obstacles_set``) porque, por
+        definição, o agente "vê" tudo dentro da janela KxK (sensor imediato).
+        Mas como esses obstáculos também são adicionados a ``_seen_obstacles``
+        em ``_update_seen_obstacles``, nenhuma informação adicional é exposta:
+        o BFS e os outros cálculos consultam apenas a memória persistente.
         """
         K = self.K
         r = self.window_radius
@@ -271,6 +295,7 @@ class GridWorldCPPEnv(gym.Env):
         self.count_steps = 0
         self.obstacles_locations = []
         self._obstacles_set = set()
+        self._seen_obstacles = set()
         self.visited = set()
 
         # Place agent randomly
@@ -290,6 +315,10 @@ class GridWorldCPPEnv(gym.Env):
 
         # Mark starting position as visited
         self.visited.add(agent_tuple)
+
+        # Atualiza obstáculos vistos com o que está na janela inicial do agente
+        # ANTES de qualquer cálculo derivado (frontier BFS, etc.).
+        self._update_seen_obstacles()
 
         # Initial frontier + potential (used by step() for shaping baseline).
         self._frontier_info = self._compute_frontier_info()
@@ -351,6 +380,9 @@ class GridWorldCPPEnv(gym.Env):
             reward -= 5.0
         else:
             truncated = False
+
+        # Após mover, atualiza obstáculos vistos com o que está na nova janela.
+        self._update_seen_obstacles()
 
         # Update frontier info AFTER state changes; then apply potential-
         # based shaping (Ng et al. 1999):

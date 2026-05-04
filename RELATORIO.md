@@ -65,7 +65,11 @@ A resolução F = 8 é **independente do tamanho do grid**. No 5×5 ela é mais 
 
 A separação em canais one-hot também resolve o problema do encoding `{0, 1, 2}`: o ReLU/Conv não trata 2 como "duas vezes mais obstáculo que 1". O sinal fica linearmente separável.
 
-**Não viola visibilidade parcial.** O `local_map` cobre 49 células em torno do agente — apenas ~50 % de um grid 10×10 e ~12 % de um grid 20×20. O `global_map` carrega só as células que o agente **já visitou** (memória persistente do agente, não conhecimento sobre cells não-vistas). O `frontier` deriva exclusivamente do histórico de visitas. Em nenhum momento o agente vê obstáculos fora da janela 7×7 atual.
+**Não viola visibilidade parcial.** Toda a observação é construída a partir de duas fontes:
+- **Sensor imediato:** o que está dentro da janela 7×7 ao redor do agente *agora*.
+- **Memória persistente:** as células visitadas (`self.visited`) e os obstáculos já vistos (`self._seen_obstacles`, conjunto que cresce monotonicamente conforme obstáculos entram na janela em algum step).
+
+Concretamente: o `local_map` mostra 49 células em torno do agente (~50 % de um grid 10×10, ~12 % de um grid 20×20); o `global_map` carrega apenas as células visitadas; e o **BFS que computa o `frontier` bloqueia somente em `_seen_obstacles`** — células nunca observadas são tratadas como potencialmente livres (otimismo sob incerteza), o que é exatamente o comportamento que o enunciado exige. Em nenhum momento o agente acessa o conjunto completo de obstáculos do grid via observação ou cálculo derivado.
 
 ### 2.2 CNN feature extractor com duas streams
 
@@ -92,7 +96,7 @@ O **teorema de Ng et al. (1999)** garante que **a política ótima não muda** s
 Escolha do potencial:
 $$φ(s) = -d_\text{BFS}(\text{agente},\;\text{fronteira mais próxima}),\quad φ(s_\text{terminal}) = 0$$
 
-A BFS é executada sobre o **terreno conhecido pelo agente** (visitadas + obstáculos vistos), respeitando a restrição de visibilidade parcial. Cada passo do agente em direção à fronteira gera ≈ +1.0 de shaping (porque `d` cai por 1, e `gamma * (d - 1) - d ≈ 1 - gamma * 0 = 1` para `γ` próximo de 1). Cada passo na direção contrária penaliza simetricamente.
+A BFS é executada sobre o **terreno conhecido pelo agente** — `visited ∪ ¬_seen_obstacles` — bloqueando apenas em obstáculos que o agente já viu pessoalmente. Células nunca observadas são tratadas como potencialmente livres (otimismo sob incerteza). Cada passo do agente em direção à fronteira gera ≈ +1.0 de shaping (porque `d` cai por 1, e `gamma * (d - 1) - d ≈ 1 - gamma * 0 = 1` para `γ` próximo de 1). Cada passo na direção contrária penaliza simetricamente.
 
 A flag `shaping_enabled` permite desligar (útil para ablação).
 
@@ -133,9 +137,9 @@ Avaliação com **100 episódios e sementes fixas 10000–10099** em cada tamanh
 
 | Tamanho | Full coverage rate | Cobertura média | σ | Passos médios | σ |
 |---|---|---|---|---|---|
-| **5×5**   | **96.0 %** | 99.68 % | 1.73 |   34.6 |  15.8 |
-| **10×10** | **92.0 %** | **99.89 %** | 0.44 |  167.0 | 136.3 |
-| **20×20 (bônus)** | **80.0 %** | **99.88 %** | 0.48 | 1030.0 | 697.8 |
+| **5×5**   | **95.0 %** | 99.41 % | 3.44 |   34.7 |  16.9 |
+| **10×10** | **91.0 %** | 99.86 % | 0.49 |  169.6 | 144.1 |
+| **20×20 (bônus)** | **80.0 %** | **99.93 %** | 0.17 | 1173.1 | 640.3 |
 
 > A configuração final é treinada com 1 M + 4 M + 8 M passos (currículo). A tabela pode ser regenerada bit-a-bit com `python evaluate.py --pair 5 ... --pair 10 ... --pair 20 ... --seed 10000 --episodes 100`.
 
@@ -143,10 +147,10 @@ Avaliação com **100 episódios e sementes fixas 10000–10099** em cada tamanh
 
 | Métrica | Baseline (página) | Proposta | Δ |
 |---|---|---|---|
-| 5×5 full coverage rate | 75–81 % | **96.0 %** | **+15 a +21 pp** |
-| 10×10 cobertura média | 59–70 % | **99.89 %** | **+29.9 a +40.9 pp** |
+| 5×5 full coverage rate | 75–81 % | **95.0 %** | **+14 a +20 pp** |
+| 10×10 cobertura média | 59–70 % | **99.86 %** | **+29.9 a +40.9 pp** |
 | 20×20 (bônus) full coverage rate | — | **80.0 %** | — |
-| 20×20 (bônus) cobertura média | — | **99.88 %** | — |
+| 20×20 (bônus) cobertura média | — | **99.93 %** | — |
 
 A melhora mais saliente é o salto na cobertura média do 10×10, que passa do regime "agente erra metade do mapa" para "agente erra ~0.1 células por episódio em média". O 20×20, que sequer aparecia no baseline da página, é viabilizado pela combinação shaping + currículo.
 
@@ -158,7 +162,7 @@ Mesmo procedimento de avaliação (100 eps, sementes 10000–10099, estocástico
 |---|---|---|---|---|---|---|
 | **v1**: só `local_map`                  | 94.0 % | 99.32 % |  3.0 % | 94.78 % | — | — |
 | **v2**: + `global_map`                  | 96.0 % | 99.77 % | 76.0 % | 99.10 % | — | — |
-| **v3**: + `frontier` + reward shaping   | **96.0 %** | **99.68 %** | **92.0 %** | **99.89 %** | **80.0 %** | **99.88 %** |
+| **v3**: + `frontier` + reward shaping   | **95.0 %** | **99.41 %** | **91.0 %** | **99.86 %** | **80.0 %** | **99.93 %** |
 
 Cada incremento ataca uma falha específica:
 
