@@ -1,7 +1,9 @@
-gymnasium
-numpy
-typing
-stable-baselines3
-pygame
-tensorboard
-seaborn
+gymnasium==1.2.3
+numpy==2.4.4
+stable_baselines3==2.8.0
+torch==2.11.0
+pygame==2.6.1
+tensorboard==2.20.0
+matplotlib==3.10.9
+pandas==3.0.2
+seaborn==0.13.2

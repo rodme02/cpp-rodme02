@@ -1,5 +1,16 @@
-venv
-__pycache__
-log
+# venv
+venv/
+.venv/
 
+# bytecode
+__pycache__/
+*.py[cod]
 
+# IDE / OS
+.vscode/
+.DS_Store
+
+# training artifacts (regenerable)
+data/
+log/
+*.log

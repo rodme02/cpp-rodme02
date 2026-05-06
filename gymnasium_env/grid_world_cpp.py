@@ -32,8 +32,7 @@ class GridWorldCPPEnv(gym.Env):
     # Radius 3 -> 7x7 patch. Tunable via constructor argument.
     DEFAULT_WINDOW_RADIUS = 3
 
-    # Fixed-resolution side of the global pooled memory map. Independent of
-    # the grid size to preserve transfer between sizes.
+    # Fixed-resolution side of the global pooled memory map (size-invariant).
     GLOBAL_MAP_SIDE = 8
 
     def __init__(
@@ -45,6 +44,7 @@ class GridWorldCPPEnv(gym.Env):
         window_radius: int = DEFAULT_WINDOW_RADIUS,
         shaping_enabled: bool = True,
         shaping_gamma: float = 0.995,
+        shaping_scale: float = 1.0,
     ):
         self.size = size
         self.window_size = 512
@@ -52,6 +52,7 @@ class GridWorldCPPEnv(gym.Env):
         self.obstacles_locations = []
         self.count_steps = 0
         self.max_steps = max_steps
+        self.count_revisits = 0
 
         self.window_radius = window_radius
         self.K = 2 * window_radius + 1  # local map side
@@ -59,6 +60,7 @@ class GridWorldCPPEnv(gym.Env):
         # Reward shaping (potential-based, Ng et al. 1999).
         self.shaping_enabled = shaping_enabled
         self.shaping_gamma = shaping_gamma
+        self.shaping_scale = shaping_scale
 
         # Track visited cells
         self.visited = set()
@@ -213,7 +215,7 @@ class GridWorldCPPEnv(gym.Env):
         dist_raw = self._frontier_info[3]
         if dist_raw == float("inf"):
             return 0.0
-        return -dist_raw
+        return -self.shaping_scale * dist_raw
 
     def _build_global_map(self) -> np.ndarray:
         """Pooled persistent memory at fixed resolution (2, F, F).
@@ -288,11 +290,15 @@ class GridWorldCPPEnv(gym.Env):
             "total_free_cells": self.total_free_cells,
             "steps": self.count_steps,
             "size": self.size,
+            "revisits": self.count_revisits,
+            "repeat_ratio": (self.count_revisits / self.count_steps
+                             if self.count_steps > 0 else 0.0),
         }
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.count_steps = 0
+        self.count_revisits = 0
         self.obstacles_locations = []
         self._obstacles_set = set()
         self._seen_obstacles = set()
@@ -367,6 +373,7 @@ class GridWorldCPPEnv(gym.Env):
             self.visited.add(current_pos)
         else:
             reward -= 0.3
+            self.count_revisits += 1
 
         # Termination on full coverage
         full_coverage = len(self.visited) >= self.total_free_cells
@@ -455,13 +462,16 @@ class GridWorldCPPEnv(gym.Env):
             pix_square_size / 3,
         )
 
-        # Draw coverage info text
-        font = pygame.font.SysFont(None, 24)
-        coverage_text = font.render(
-            f"Coverage: {self.coverage_ratio:.1%} | Steps: {self.count_steps}",
-            True, (0, 0, 0)
-        )
-        canvas.blit(coverage_text, (5, 5))
+        # Coverage info overlay (skip silently if pygame.font is unavailable).
+        try:
+            font = pygame.font.SysFont(None, 24)
+            coverage_text = font.render(
+                f"Coverage: {self.coverage_ratio:.1%} | Steps: {self.count_steps}",
+                True, (0, 0, 0)
+            )
+            canvas.blit(coverage_text, (5, 5))
+        except (NotImplementedError, AttributeError):
+            pass
 
         # Draw gridlines
         for x in range(self.size + 1):

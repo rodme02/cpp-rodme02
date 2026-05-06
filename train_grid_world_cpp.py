@@ -15,8 +15,10 @@ from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
+import torch as th
 
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.logger import configure
@@ -25,6 +27,27 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 from gymnasium_env.grid_world_cpp import GridWorldCPPEnv
 from gymnasium_env.cpp_policy import CPPFeatureExtractor
+from plasticity_callback import PlasticityCallback
+
+
+class EntCoefScheduleCallback(BaseCallback):
+    """Linear schedule of ent_coef over training (SB3 doesn't expose it as callable)."""
+
+    def __init__(self, ent_start: float, ent_end: float, total_steps: int,
+                 verbose: int = 0):
+        super().__init__(verbose)
+        self.ent_start = ent_start
+        self.ent_end = ent_end
+        self.total_steps = max(1, total_steps)
+
+    def _on_step(self) -> bool:
+        progress = min(1.0, self.num_timesteps / self.total_steps)
+        self.model.ent_coef = (self.ent_start
+                               + (self.ent_end - self.ent_start) * progress)
+        return True
+
+    def _on_rollout_end(self) -> None:
+        self.logger.record("train/ent_coef_scheduled", float(self.model.ent_coef))
 
 
 ENV_ID = "gymnasium_env/GridWorldCPP-v0"
@@ -89,16 +112,23 @@ def make_env(size: int, n_envs: int = 8, seed: int = 0):
     return vec_cls([make_one(i) for i in range(n_envs)])
 
 
+def _linear_schedule(initial: float):
+    """SB3-compatible linear decay: progress 1.0 -> 0.0 over training."""
+    def schedule(progress_remaining: float) -> float:
+        return initial * progress_remaining
+    return schedule
+
+
 def _ppo_kwargs() -> dict:
     return dict(
-        learning_rate=3e-4,
+        learning_rate=_linear_schedule(3e-4),
         n_steps=1024,
         batch_size=256,
         n_epochs=10,
         gamma=0.995,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.02,        # held constant inside one stage; reduce per stage
+        ent_coef=0.02,
         vf_coef=0.5,
         max_grad_norm=0.5,
         device="cpu",
@@ -106,6 +136,8 @@ def _ppo_kwargs() -> dict:
             features_extractor_class=CPPFeatureExtractor,
             features_extractor_kwargs=dict(features_dim=128),
             net_arch=dict(pi=[64, 64], vf=[64, 64]),
+            optimizer_class=th.optim.AdamW,
+            optimizer_kwargs=dict(weight_decay=1e-4),
         ),
     )
 
@@ -119,16 +151,27 @@ def _model_tag(size: int, total_steps: int, suffix: str = "") -> str:
     return name
 
 
+def _reset_value_head(model: PPO) -> None:
+    # Returns escalam com horizonte; value head do estágio anterior subestima
+    # sistematicamente no novo grid. Recalibração forçada sem mexer na policy.
+    head = model.policy.value_net
+    th.nn.init.orthogonal_(head.weight, gain=1.0)
+    th.nn.init.zeros_(head.bias)
+
+
 def train_stage(
     size: int,
     total_steps: int,
     init_model: str | None = None,
     n_envs: int = 8,
     ent_coef: float | None = None,
+    ent_coef_end: float | None = None,
     seed: int = 0,
     suffix: str = "",
+    reset_value_head: bool = False,
+    plasticity_log_freq: int = 5,
 ) -> str:
-    """Train (or fine-tune) for one curriculum stage. Returns model path."""
+    """Train one curriculum stage. Returns model path."""
     _ensure_dirs()
     _register_env()
 
@@ -157,13 +200,22 @@ def train_stage(
         )
         if ent_coef is not None:
             model.ent_coef = ent_coef
+        if reset_value_head:
+            print("Resetting value head")
+            _reset_value_head(model)
 
     tag = _model_tag(size, total_steps, suffix=suffix)
     log_path = os.path.join(LOG_DIR, tag)
     new_logger = configure(log_path, ["stdout", "csv", "tensorboard"])
     model.set_logger(new_logger)
 
-    model.learn(total_timesteps=total_steps, progress_bar=False)
+    callbacks = [PlasticityCallback(log_freq=plasticity_log_freq)]
+    if ent_coef_end is not None and ent_coef is not None:
+        callbacks.append(EntCoefScheduleCallback(
+            ent_start=ent_coef, ent_end=ent_coef_end, total_steps=total_steps))
+        print(f"Entropy schedule: {ent_coef:.4f} -> {ent_coef_end:.4f}")
+    model.learn(total_timesteps=total_steps, progress_bar=False,
+                callback=callbacks)
 
     model_path = os.path.join(DATA_DIR, f"{tag}.zip")
     model.save(model_path)
@@ -181,31 +233,41 @@ def cmd_train(args):
         n_envs=args.n_envs,
         ent_coef=args.ent_coef,
         seed=args.seed,
+        reset_value_head=getattr(args, "reset_value_head", False),
     )
 
 
 def cmd_curriculum(args):
-    """5x5 -> 10x10 -> 20x20 with weight transfer between stages.
-
-    Budgets target ~100% full coverage at each stage. Empirically, with
-    the dual observation + potential-based shaping, 1M / 4M / 8M timesteps
-    are enough; smaller multipliers (--total-multiplier 0.5) reduce these
-    proportionally for fast iteration.
-    """
+    """5x5 -> 10x10 -> 20x20 com transfer e value-head reset entre estágios."""
     m = args.total_multiplier
     seed = args.seed
+    reset_vh = not args.no_reset_value_head
 
     p1 = train_stage(size=5,  total_steps=int(1_000_000 * m), n_envs=args.n_envs,
-                     ent_coef=0.04, seed=seed,        suffix="stage1")
+                     ent_coef=0.05, ent_coef_end=0.02,
+                     seed=seed,        suffix="stage1")
     p2 = train_stage(size=10, total_steps=int(4_000_000 * m), n_envs=args.n_envs,
-                     init_model=p1, ent_coef=0.02, seed=seed + 1, suffix="stage2")
+                     init_model=p1, ent_coef=0.03, ent_coef_end=0.015,
+                     seed=seed + 1, suffix="stage2",
+                     reset_value_head=reset_vh)
     p3 = train_stage(size=20, total_steps=int(8_000_000 * m), n_envs=args.n_envs,
-                     init_model=p2, ent_coef=0.015, seed=seed + 2, suffix="stage3")
+                     init_model=p2, ent_coef=0.02, ent_coef_end=0.01,
+                     seed=seed + 2, suffix="stage3",
+                     reset_value_head=reset_vh)
 
     print("\n=== Curriculum complete ===")
     print(f"Stage 1 (5x5)   : {p1}")
     print(f"Stage 2 (10x10) : {p2}")
     print(f"Stage 3 (20x20) : {p3}")
+
+
+def cmd_no_curriculum(args):
+    """Treina 20x20 from scratch (sanity check de transfer)."""
+    m = args.total_multiplier
+    total = int(13_000_000 * m)
+    p = train_stage(size=20, total_steps=total, n_envs=args.n_envs,
+                    ent_coef=0.015, seed=args.seed, suffix="from_scratch")
+    print(f"\n=== From-scratch 20x20 complete: {p} ===")
 
 
 def _resolve_model_path(model_arg: str) -> str:
@@ -302,6 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--n-envs", type=int, default=8)
     pt.add_argument("--ent-coef", type=float, default=None)
     pt.add_argument("--seed", type=int, default=0)
+    pt.add_argument("--reset-value-head", action="store_true",
+                    help="Reset value head after loading --init.")
     pt.set_defaults(func=cmd_train)
 
     pc = sub.add_parser("curriculum",
@@ -310,7 +374,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Scale total timesteps for all stages (use <1 for smoke)")
     pc.add_argument("--n-envs", type=int, default=8)
     pc.add_argument("--seed", type=int, default=0)
+    pc.add_argument("--no-reset-value-head", action="store_true",
+                    help="Disable value-head reset on stage transition.")
     pc.set_defaults(func=cmd_curriculum)
+
+    pn = sub.add_parser("no-curriculum",
+                        help="Train 20x20 from scratch (sanity check)")
+    pn.add_argument("--total-multiplier", type=float, default=1.0,
+                    help="Scale total timesteps (default 13M total).")
+    pn.add_argument("--n-envs", type=int, default=8)
+    pn.add_argument("--seed", type=int, default=0)
+    pn.set_defaults(func=cmd_no_curriculum)
 
     pe = sub.add_parser("test", help="Evaluate a trained model")
     pe.add_argument("--size", type=int, default=5)

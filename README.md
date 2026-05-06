@@ -1,37 +1,41 @@
 # Coverage Path Planning com PPO
 
-APS final de Reinforcement Learning (Insper, 10º semestre, prof. Fabrício Barth). Enunciado: <https://insper.github.io/rl/classes/23_custom_env_agent/>.
+Agente que aprende a cobrir todas as células livres de um grid com obstáculos, sob visibilidade parcial, usando PPO + CNN egocêntrica + currículo crescente em tamanho de grid (5×5 → 10×10 → 20×20) com transfer entre estágios e potential-based reward shaping.
 
-> **📄 Relatório completo:** [`RELATORIO.md`](RELATORIO.md). O relatório descreve a estratégia adotada, a justificativa em conceitos de RL, os resultados obtidos e a análise.
+## Relatório
+
+A descrição da estratégia, justificativa em conceitos de RL, resultados e análise estão em **[`RELATORIO.md`](RELATORIO.md)**. A revisão de literatura que sustenta a recipe atual está em [`RELATORIO_LITERATURA.md`](RELATORIO_LITERATURA.md).
 
 ## Resultados (resumo)
 
-100 episódios, sementes fixas 10000–10099, política estocástica. Detalhes e tabelas completas em [`RELATORIO.md`](RELATORIO.md).
+100 episódios, sementes fixas 10000–10099, política estocástica.
 
-| Tamanho | Full coverage | Cobertura média |
-|---|---|---|
-| 5×5 | **95.0 %** | 99.41 % |
-| 10×10 | **91.0 %** | 99.86 % |
-| 20×20 (bônus) | **80.0 %** | **99.93 %** |
+| Tamanho | Full coverage | Cobertura média | Steps médios |
+|---|---|---|---|
+| 5×5 | **97.0 %** | 99.82 % | 30.5 |
+| 10×10 | **92.0 %** | 99.89 % | 153.0 |
+| 20×20 | **81.0 %** | 99.93 % | 957.7 |
 
 ## Estrutura
 
 ```
 .
 ├── README.md                    # este arquivo
-├── RELATORIO.md                 # relatório técnico completo
+├── RELATORIO.md                 # relatório técnico
+├── RELATORIO_LITERATURA.md      # revisão de literatura
 ├── requirements.txt
 ├── gymnasium_env/
 │   ├── grid_world_cpp.py        # ambiente CPP custom
-│   └── cpp_policy.py            # CNN feature extractor (custom)
-├── train_grid_world_cpp.py      # train | curriculum | test | run
-├── run_grid_world_cpp.py        # demo do env com agente aleatório
-├── evaluate.py                  # avaliação reproduzível
-├── make_plots.py                # curves | bars | ablation | all
-├── data/                        # checkpoints (gitignored, gerados no treino)
-├── log/                         # tensorboard + CSV (gitignored)
+│   └── cpp_policy.py            # CNN feature extractor
+├── train_grid_world_cpp.py      # train | curriculum | no-curriculum | test | run
+├── plasticity_callback.py       # diagnósticos de plasticidade
+├── evaluate.py                  # avaliação primária
+├── evaluate_cross.py            # cross-evaluation (modelo × tamanho)
+├── make_plots.py                # curves | bars | ablation | plasticity | cross | all
+├── data/                        # checkpoints (gerados no treino)
+├── log/                         # tensorboard + CSV (gerados no treino)
 └── results/
-    ├── eval_final_{stoch,det}.json
+    ├── eval_*.json
     └── figures/*.png
 ```
 
@@ -41,15 +45,20 @@ APS final de Reinforcement Learning (Insper, 10º semestre, prof. Fabrício Bart
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Currículo completo: 5×5 (1M) → 10×10 (4M) → 20×20 (8M) com transfer entre estágios
+# Currículo completo 5×5 (1M) → 10×10 (4M) → 20×20 (8M)
 python train_grid_world_cpp.py curriculum --n-envs 8 --seed 42
 
-# Avaliação dos 3 modelos em 100 episódios (seeds fixas, reproduzível bit-a-bit)
+# Avaliação 100 episódios cada tamanho
 python evaluate.py \
   --pair 5  data/<stage1>.zip \
   --pair 10 data/<stage2>.zip \
   --pair 20 data/<stage3>.zip \
   --episodes 100 --seed 10000 --out results/eval_final_stoch.json
+
+# Cross-evaluation (cada modelo em todos os tamanhos, detecta forgetting)
+python evaluate_cross.py \
+  --models data/<stage1>.zip data/<stage2>.zip data/<stage3>.zip \
+  --episodes 100 --seed 10000 --out results/cross_eval.json
 
 # Gráficos
 python make_plots.py all \
@@ -57,7 +66,7 @@ python make_plots.py all \
   --eval-json results/eval_final_stoch.json
 ```
 
-Para iteração rápida use `--total-multiplier 0.25` no `curriculum` (1/4 dos timesteps).
+Para iteração rápida use `--total-multiplier 0.25` (1/4 dos timesteps).
 
 Para visualizar um episódio do agente treinado:
 

@@ -1,7 +1,7 @@
 [
   {
     "size": 5,
-    "model": "ppo_cpp_5_3_100_1000000_20260505_084746_stage1.zip",
+    "model": "ppo_cpp_5_3_100_1000000_20260505_152722_stage1.zip",
     "episodes": 100,
     "deterministic": false,
     "full_coverage_rate_pct": 97.0,
@@ -9,16 +9,16 @@
     "coverage_std_pct": 1.0984587248722335,
     "coverage_min_pct": 90.9090909090909,
     "coverage_max_pct": 100.0,
-    "steps_mean": 30.53,
-    "steps_std": 13.2510037355666,
+    "steps_mean": 32.85,
+    "steps_std": 14.105584000671508,
     "steps_min": 22,
     "steps_max": 100,
-    "repeat_ratio_mean": 0.22737883356789737,
-    "repeat_ratio_std": 0.11992683396741152
+    "repeat_ratio_mean": 0.259368085140705,
+    "repeat_ratio_std": 0.12049232045399064
   },
   {
     "size": 10,
-    "model": "ppo_cpp_10_12_600_4000000_20260505_090740_stage2.zip",
+    "model": "ppo_cpp_10_12_600_4000000_20260505_154732_stage2.zip",
     "episodes": 100,
     "deterministic": false,
     "full_coverage_rate_pct": 92.0,
@@ -26,28 +26,28 @@
     "coverage_std_pct": 0.44011174388720614,
     "coverage_min_pct": 96.5909090909091,
     "coverage_max_pct": 100.0,
-    "steps_mean": 153.0,
-    "steps_std": 132.66461472449993,
-    "steps_min": 94,
+    "steps_mean": 152.51,
+    "steps_std": 132.45244391856272,
+    "steps_min": 97,
     "steps_max": 600,
-    "repeat_ratio_mean": 0.2568937375973229,
-    "repeat_ratio_std": 0.15602821421204902
+    "repeat_ratio_mean": 0.2665204618499774,
+    "repeat_ratio_std": 0.16954435190342929
   },
   {
     "size": 20,
-    "model": "ppo_cpp_20_50_2400_8000000_20260505_102703_stage3.zip",
+    "model": "ppo_cpp_20_50_2400_8000000_20260505_171119_stage3.zip",
     "episodes": 100,
     "deterministic": false,
     "full_coverage_rate_pct": 81.0,
-    "coverage_mean_pct": 99.92857142857143,
-    "coverage_std_pct": 0.17320508075688815,
+    "coverage_mean_pct": 99.92285714285714,
+    "coverage_std_pct": 0.1888958248693214,
     "coverage_min_pct": 98.85714285714286,
     "coverage_max_pct": 100.0,
-    "steps_mean": 957.7,
-    "steps_std": 728.7577169402737,
-    "steps_min": 447,
+    "steps_mean": 942.53,
+    "steps_std": 721.7531774090087,
+    "steps_min": 487,
     "steps_max": 2400,
-    "repeat_ratio_mean": 0.37734731669660604,
-    "repeat_ratio_std": 0.19792491440754
+    "repeat_ratio_mean": 0.3866390055329541,
+    "repeat_ratio_std": 0.20154761347968123
   }
 ]

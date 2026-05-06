@@ -63,7 +63,7 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
     )
     model = PPO.load(model_path, device="cpu")
 
-    coverages, steps_list = [], []
+    coverages, steps_list, repeat_ratios = [], [], []
     full = 0
     for i in range(episodes):
         obs, info = env.reset(seed=seed + i)
@@ -75,12 +75,14 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
             steps += 1
         coverages.append(info["coverage"])
         steps_list.append(steps)
+        repeat_ratios.append(info.get("repeat_ratio", 0.0))
         if terminated and not truncated:
             full += 1
     env.close()
 
     cov = np.array(coverages)
     stp = np.array(steps_list)
+    rep = np.array(repeat_ratios)
     return {
         "size": size,
         "model": os.path.basename(model_path),
@@ -95,6 +97,8 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
         "steps_std": float(stp.std()),
         "steps_min": int(stp.min()),
         "steps_max": int(stp.max()),
+        "repeat_ratio_mean": float(rep.mean()),
+        "repeat_ratio_std": float(rep.std()),
     }
 
 
@@ -131,11 +135,13 @@ def main() -> None:
         print(f"\nWrote {args.out}")
 
     print("\n=== Summary ===")
-    print(f"{'Size':>5} {'Full %':>8} {'Cov %':>8} {'σ':>6} {'Steps':>8} {'σ':>6}")
+    print(f"{'Size':>5} {'Full %':>8} {'Cov %':>8} {'σ':>6} {'Steps':>8} "
+          f"{'σ':>6} {'Repeat':>7}")
     for r in rows:
         print(f"{r['size']:>5} {r['full_coverage_rate_pct']:>8.2f} "
               f"{r['coverage_mean_pct']:>8.2f} {r['coverage_std_pct']:>6.2f} "
-              f"{r['steps_mean']:>8.1f} {r['steps_std']:>6.1f}")
+              f"{r['steps_mean']:>8.1f} {r['steps_std']:>6.1f} "
+              f"{r.get('repeat_ratio_mean', 0.0):>7.3f}")
 
 
 if __name__ == "__main__":

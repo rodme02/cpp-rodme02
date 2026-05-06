@@ -1,9 +1,4 @@
-"""Feature extractor com duas streams CNN para o env CPP.
-
-local_map (3,7,7) e global_map (2,8,8) entram em CNNs paralelas; coverage
-e frontier (4 escalares) entram num MLP curto. Tudo concatenado em 128
-features para a policy/value head do PPO.
-"""
+"""Dual-stream CNN feature extractor para o env CPP."""
 from __future__ import annotations
 
 import gymnasium as gym
@@ -14,10 +9,13 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
 def _conv_block(in_ch: int, out_ch: int) -> nn.Sequential:
+    # GroupNorm(1, C) em vez de BatchNorm: PPO coleta 1 amostra/env por step.
     return nn.Sequential(
         nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+        nn.GroupNorm(1, out_ch),
         nn.ReLU(inplace=True),
         nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+        nn.GroupNorm(1, out_ch),
         nn.ReLU(inplace=True),
         nn.Flatten(),
     )
@@ -40,22 +38,23 @@ class CPPFeatureExtractor(BaseFeaturesExtractor):
             global_flat = self.global_cnn(global_sample).shape[1]
 
         scalar_dim = 16
-        # Split the latent budget evenly between local and global streams.
         spatial_dim = features_dim - scalar_dim
         local_dim = spatial_dim // 2
         global_dim = spatial_dim - local_dim
 
         self.local_proj = nn.Sequential(
             nn.Linear(local_flat, local_dim),
+            nn.LayerNorm(local_dim),
             nn.ReLU(inplace=True),
         )
         self.global_proj = nn.Sequential(
             nn.Linear(global_flat, global_dim),
+            nn.LayerNorm(global_dim),
             nn.ReLU(inplace=True),
         )
-        # 4 scalar inputs: coverage (1) + frontier (3 = dx, dy, dist).
         self.scalar_proj = nn.Sequential(
             nn.Linear(4, scalar_dim),
+            nn.LayerNorm(scalar_dim),
             nn.ReLU(inplace=True),
         )
 
