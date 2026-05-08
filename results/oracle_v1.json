@@ -1,0 +1,32 @@
+[
+  {
+    "size": 5,
+    "episodes": 100,
+    "seed_start": 10000,
+    "connectivity_perfect_pct": 97.0,
+    "connectivity_mean_pct": 99.81818181818181,
+    "oracle_full_pct": 97.0,
+    "oracle_cov_mean_pct": 99.81818181818181,
+    "oracle_steps_mean": 28.57
+  },
+  {
+    "size": 10,
+    "episodes": 100,
+    "seed_start": 10000,
+    "connectivity_perfect_pct": 92.0,
+    "connectivity_mean_pct": 99.88636363636364,
+    "oracle_full_pct": 92.0,
+    "oracle_cov_mean_pct": 99.88636363636364,
+    "oracle_steps_mean": 150.79
+  },
+  {
+    "size": 20,
+    "episodes": 100,
+    "seed_start": 10000,
+    "connectivity_perfect_pct": 81.0,
+    "connectivity_mean_pct": 99.92857142857143,
+    "oracle_full_pct": 81.0,
+    "oracle_cov_mean_pct": 99.92857142857143,
+    "oracle_steps_mean": 827.85
+  }
+]
