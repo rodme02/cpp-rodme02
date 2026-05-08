@@ -88,8 +88,15 @@ Para iteração rápida use `--total-multiplier 0.25` (1/4 dos timesteps).
 Para visualizar um episódio do agente treinado:
 
 ```bash
-python train_grid_world_cpp.py run --size 10 --model data/<modelo>.zip --deterministic
+python train_grid_world_cpp.py run --size 20 --model "$STAGE3"
 ```
+
+> **Atenção:** rode **sem** `--deterministic`. A política PPO aprende uma
+> distribuição estocástica de ações; em estados com vários vizinhos de
+> valor similar (típico em CPP), o ruído da amostragem desempata e quebra
+> ciclos. Argmax (determinístico) cria loops e deixa células sem cobrir —
+> no 20×20, full coverage cai de 100 % para 66 %. Os números reportados
+> em RELATORIO §3 são todos com a política estocástica.
 
 ## Renderização
 
