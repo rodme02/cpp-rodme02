@@ -8,17 +8,19 @@ import pygame
 
 # Coverage Path Planning environment.
 #
-# Visibilidade parcial: o agente só vê o que está dentro da janela KxK ao redor
-# dele e o que ele já viu antes (memória persistente). Em particular, todos os
-# cálculos derivados (frontier BFS, global_map) usam APENAS o conjunto
+# Visibilidade parcial: o agente só vê uma janela 5x5 egocêntrica e o que ele
+# já viu antes (memória persistente). Em particular, todos os cálculos
+# derivados (frontier BFS, global_map) usam APENAS o conjunto
 # ``_seen_obstacles`` — obstáculos que entraram na janela do agente em algum
 # step anterior — nunca o conjunto completo de obstáculos do grid.
 #
 # Observation (Dict, todos com shape fixo independente do tamanho do grid):
-#   local_map  (3, 7, 7)   — janela egocêntrica one-hot: obstáculo/visitada/livre
+#   local_map  (3, 5, 5)   — janela egocêntrica one-hot: obstáculo/visitada/livre
 #   global_map (2, 8, 8)   — memória pooleada: visitadas (max-pool) + posição do agente
 #   coverage   (1,)        — fração de células livres visitadas
 #   frontier   (3,)        — Δx, Δy, distância BFS (normalizadas) à fronteira mais próxima
+#   progress   (1,)        — count_steps / max_steps (orçamento de tempo restante)
+#   trail      (8, 2)      — últimas 8 posições normalizadas (-1 quando ainda sem histórico)
 #
 # Reward base: +1 nova / -0.3 revisita / -0.5 colisão / -0.1 step / +10 cobertura completa / -5 truncamento.
 # Reward shaping potential-based (Ng et al. 1999) com φ(s) = -d_BFS(agente, fronteira),
@@ -29,11 +31,14 @@ class GridWorldCPPEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     # Half-window of the egocentric local map. K = 2*WINDOW_RADIUS + 1.
-    # Radius 3 -> 7x7 patch. Tunable via constructor argument.
-    DEFAULT_WINDOW_RADIUS = 3
+    # Radius 2 -> 5x5 patch (regra do exercício: agente vê grid 5x5 com ele no centro).
+    DEFAULT_WINDOW_RADIUS = 2
 
     # Fixed-resolution side of the global pooled memory map (size-invariant).
     GLOBAL_MAP_SIDE = 8
+
+    # Comprimento do trail (últimas K posições do agente expostas na obs).
+    TRAIL_LEN = 8
 
     def __init__(
         self,
@@ -45,10 +50,12 @@ class GridWorldCPPEnv(gym.Env):
         shaping_enabled: bool = True,
         shaping_gamma: float = 0.995,
         shaping_scale: float = 1.0,
+        obs_quantity_range: Optional[Tuple[int, int]] = None,
     ):
         self.size = size
         self.window_size = 512
         self.obs_quantity = obs_quantity
+        self.obs_quantity_range = obs_quantity_range
         self.obstacles_locations = []
         self.count_steps = 0
         self.max_steps = max_steps
@@ -65,6 +72,12 @@ class GridWorldCPPEnv(gym.Env):
         # Track visited cells
         self.visited = set()
 
+        # Trail: deque das últimas TRAIL_LEN posições do agente (mais recente
+        # à direita). Permite a política reconhecer e quebrar ciclos curtos
+        # de re-visitação no end-game sem precisar de recorrência.
+        self.trail_len = self.TRAIL_LEN
+        self._trail: deque = deque(maxlen=self.trail_len)
+
         self._agent_location = np.array([-1, -1], dtype=int)
         self._frontier_info = (0.0, 0.0, 0.0, 0)  # dx, dy, dist_norm, dist_raw
         self._potential_cached = 0.0
@@ -73,6 +86,9 @@ class GridWorldCPPEnv(gym.Env):
         #   local_map  (3, K, K)        -> fine-grained egocentric view
         #   global_map (2, F, F)        -> coarse persistent memory at fixed F
         #   coverage   (1,)             -> overall coverage scalar
+        #   frontier   (3,)             -> Δx, Δy, dist normalizados
+        #   progress   (1,)             -> orçamento (count_steps / max_steps)
+        #   trail      (TRAIL_LEN, 2)   -> últimas L posições normalizadas (-1 = ausente)
         self.F = self.GLOBAL_MAP_SIDE
         self.observation_space = gym.spaces.Dict({
             "local_map": gym.spaces.Box(
@@ -97,6 +113,18 @@ class GridWorldCPPEnv(gym.Env):
                 low=-1.0,
                 high=1.0,
                 shape=(3,),
+                dtype=np.float32,
+            ),
+            "progress": gym.spaces.Box(
+                low=0.0,
+                high=1.0,
+                shape=(1,),
+                dtype=np.float32,
+            ),
+            "trail": gym.spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(self.trail_len, 2),
                 dtype=np.float32,
             ),
         })
@@ -274,13 +302,35 @@ class GridWorldCPPEnv(gym.Env):
                     local[2, i, j] = 1.0
         return local
 
+    def _build_trail(self) -> np.ndarray:
+        """Trail right-aligned das últimas TRAIL_LEN posições do agente.
+
+        Posições normalizadas por ``size``. Slots vazios (deque ainda não
+        cheia no início do episódio) ficam com -1 (sentinela fora do range
+        [0,1]). A política pode ler trail[-1] como "posição corrente" e
+        trail[-2..] como "trajetória recente", permitindo reconhecer ciclos
+        curtos sem precisar de recorrência (LSTM).
+        """
+        L = self.trail_len
+        size_norm = max(1, self.size)
+        out = np.full((L, 2), -1.0, dtype=np.float32)
+        n = len(self._trail)
+        for i, (px, py) in enumerate(self._trail):
+            slot = L - n + i  # right-align: mais recente em out[-1]
+            out[slot, 0] = px / size_norm
+            out[slot, 1] = py / size_norm
+        return out
+
     def _get_obs(self) -> dict:
         dx, dy, dist_norm, _ = self._frontier_info
+        progress = (self.count_steps / max(1, self.max_steps)) if self.max_steps > 0 else 0.0
         return {
             "local_map": self._build_local_map(),
             "global_map": self._build_global_map(),
             "coverage": np.array([self.coverage_ratio], dtype=np.float32),
             "frontier": np.array([dx, dy, dist_norm], dtype=np.float32),
+            "progress": np.array([min(1.0, progress)], dtype=np.float32),
+            "trail": self._build_trail(),
         }
 
     def _get_info(self) -> dict:
@@ -295,29 +345,84 @@ class GridWorldCPPEnv(gym.Env):
                              if self.count_steps > 0 else 0.0),
         }
 
+    def _all_free_cells_reachable(self, agent_tuple: Tuple[int, int]) -> bool:
+        """BFS sobre o mapa real (perfect information): todas as células
+        livres são alcançáveis a partir de ``agent_tuple``?
+
+        Usado em ``reset`` para descartar (rejection sampling) layouts onde
+        o sorteio aleatório de obstáculos cria bolsões inalcançáveis. Sob
+        visibilidade parcial, esses layouts impõem um teto estrutural à
+        cobertura — irrespectivo da política, nenhum agente pode atingir
+        100%. Descartá-los na geração mantém o problema bem-posto.
+        """
+        size = self.size
+        obstacles = self._obstacles_set
+        total_free = size * size - len(obstacles)
+        queue = deque([agent_tuple])
+        seen = {agent_tuple}
+        while queue:
+            cx, cy = queue.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = cx + dx, cy + dy
+                if (0 <= nx < size and 0 <= ny < size
+                        and (nx, ny) not in obstacles
+                        and (nx, ny) not in seen):
+                    seen.add((nx, ny))
+                    queue.append((nx, ny))
+        return len(seen) >= total_free
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.count_steps = 0
         self.count_revisits = 0
-        self.obstacles_locations = []
-        self._obstacles_set = set()
         self._seen_obstacles = set()
         self.visited = set()
+        self._trail.clear()
 
-        # Place agent randomly
-        self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-        agent_tuple = (int(self._agent_location[0]), int(self._agent_location[1]))
+        # Domain randomization opcional: amostra obs_quantity em cada episódio
+        # dentro de obs_quantity_range (inclusive). Diversifica distribuição de
+        # treino e reduz overfit a uma densidade específica de obstáculos.
+        if self.obs_quantity_range is not None:
+            lo, hi = self.obs_quantity_range
+            target_quantity = int(self.np_random.integers(lo, hi + 1))
+        else:
+            target_quantity = self.obs_quantity
 
-        # Place obstacles (avoid agent and duplicates)
-        attempts = 0
-        max_attempts = 1000
-        while len(self.obstacles_locations) < self.obs_quantity and attempts < max_attempts:
-            cand = self.np_random.integers(0, self.size, size=2, dtype=int)
-            cand_tuple = (int(cand[0]), int(cand[1]))
-            if cand_tuple != agent_tuple and cand_tuple not in self._obstacles_set:
-                self.obstacles_locations.append(cand)
-                self._obstacles_set.add(cand_tuple)
-            attempts += 1
+        # Rejection sampling: gera layouts até encontrar um onde TODAS as
+        # células livres sejam alcançáveis a partir da posição do agente.
+        # Layouts com bolsões impõem teto estrutural (oracle perfect-info bate
+        # exatamente o mesmo platô que o RL), então mantê-los na distribuição
+        # apenas adiciona ruído indistinguível de overfit ao problema.
+        max_layout_resamples = 200
+        agent_tuple = (-1, -1)
+        for resample in range(max_layout_resamples):
+            self.obstacles_locations = []
+            self._obstacles_set = set()
+
+            # Place agent randomly (re-sample em cada attempt para preservar
+            # diversidade de starting positions sob aceitação por conectividade).
+            self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
+            agent_tuple = (int(self._agent_location[0]), int(self._agent_location[1]))
+
+            # Place obstacles (avoid agent and duplicates)
+            attempts = 0
+            max_attempts = 1000
+            while len(self.obstacles_locations) < target_quantity and attempts < max_attempts:
+                cand = self.np_random.integers(0, self.size, size=2, dtype=int)
+                cand_tuple = (int(cand[0]), int(cand[1]))
+                if cand_tuple != agent_tuple and cand_tuple not in self._obstacles_set:
+                    self.obstacles_locations.append(cand)
+                    self._obstacles_set.add(cand_tuple)
+                attempts += 1
+
+            if self._all_free_cells_reachable(agent_tuple):
+                break
+        # Se max_layout_resamples for esgotado (extremamente raro nos ranges
+        # usados), aceita o último layout — é melhor que travar; o agente
+        # apenas sofrerá o teto natural daquele layout.
+
+        # Trail começa com a posição inicial do agente.
+        self._trail.append(agent_tuple)
 
         # Mark starting position as visited
         self.visited.add(agent_tuple)
@@ -355,6 +460,8 @@ class GridWorldCPPEnv(gym.Env):
             self._agent_location = new_location
 
         self.count_steps += 1
+        self._trail.append((int(self._agent_location[0]),
+                            int(self._agent_location[1])))
 
         # --- CPP Reward Function ---
         current_pos = (int(self._agent_location[0]), int(self._agent_location[1]))

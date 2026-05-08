@@ -88,13 +88,15 @@ def _config_for_size(size: int) -> dict:
     }
 
 
-def make_env(size: int, n_envs: int = 8, seed: int = 0):
+def make_env(size: int, n_envs: int = 8, seed: int = 0,
+             obs_quantity_range=None):
     cfg = _config_for_size(size)
     env_kwargs = dict(
         size=size,
         obs_quantity=cfg["obs_quantity"],
         max_steps=cfg["max_steps"],
         render_mode="rgb_array",
+        obs_quantity_range=obs_quantity_range,
     )
 
     # Build a vectorized env. Use SubprocVecEnv when n_envs>1 so steps
@@ -119,7 +121,7 @@ def _linear_schedule(initial: float):
     return schedule
 
 
-def _ppo_kwargs() -> dict:
+def _ppo_kwargs(features_dim: int = 128) -> dict:
     return dict(
         learning_rate=_linear_schedule(3e-4),
         n_steps=1024,
@@ -134,7 +136,7 @@ def _ppo_kwargs() -> dict:
         device="cpu",
         policy_kwargs=dict(
             features_extractor_class=CPPFeatureExtractor,
-            features_extractor_kwargs=dict(features_dim=128),
+            features_extractor_kwargs=dict(features_dim=features_dim),
             net_arch=dict(pi=[64, 64], vf=[64, 64]),
             optimizer_class=th.optim.AdamW,
             optimizer_kwargs=dict(weight_decay=1e-4),
@@ -170,16 +172,20 @@ def train_stage(
     suffix: str = "",
     reset_value_head: bool = False,
     plasticity_log_freq: int = 5,
+    features_dim: int = 128,
+    obs_quantity_range=None,
 ) -> str:
     """Train one curriculum stage. Returns model path."""
     _ensure_dirs()
     _register_env()
 
     print(f"\n=== Training stage: size={size}, steps={total_steps:,}, "
-          f"init={init_model or 'scratch'} ===")
-    env = make_env(size, n_envs=n_envs, seed=seed)
+          f"init={init_model or 'scratch'}, features_dim={features_dim}, "
+          f"obs_range={obs_quantity_range} ===")
+    env = make_env(size, n_envs=n_envs, seed=seed,
+                   obs_quantity_range=obs_quantity_range)
 
-    kwargs = _ppo_kwargs()
+    kwargs = _ppo_kwargs(features_dim=features_dim)
     if ent_coef is not None:
         kwargs["ent_coef"] = ent_coef
 
@@ -242,18 +248,29 @@ def cmd_curriculum(args):
     m = args.total_multiplier
     seed = args.seed
     reset_vh = not args.no_reset_value_head
+    features_dim = args.features_dim
+
+    # Domain randomization no stage 3: amostra obs_quantity em torno do default
+    # (50 obstáculos). Diversifica distribuição de treino, ataca overfit a
+    # layouts difíceis específicos. Stages 1 e 2 mantém distribuição fixa
+    # (preserva ganhos do baseline já validado nesses tamanhos).
+    obs_range_stage3 = None if args.no_obstacle_random else (40, 60)
 
     p1 = train_stage(size=5,  total_steps=int(1_000_000 * m), n_envs=args.n_envs,
                      ent_coef=0.05, ent_coef_end=0.02,
-                     seed=seed,        suffix="stage1")
+                     seed=seed,        suffix="stage1",
+                     features_dim=features_dim)
     p2 = train_stage(size=10, total_steps=int(4_000_000 * m), n_envs=args.n_envs,
                      init_model=p1, ent_coef=0.03, ent_coef_end=0.015,
                      seed=seed + 1, suffix="stage2",
-                     reset_value_head=reset_vh)
+                     reset_value_head=reset_vh,
+                     features_dim=features_dim)
     p3 = train_stage(size=20, total_steps=int(8_000_000 * m), n_envs=args.n_envs,
                      init_model=p2, ent_coef=0.02, ent_coef_end=0.01,
                      seed=seed + 2, suffix="stage3",
-                     reset_value_head=reset_vh)
+                     reset_value_head=reset_vh,
+                     features_dim=features_dim,
+                     obs_quantity_range=obs_range_stage3)
 
     print("\n=== Curriculum complete ===")
     print(f"Stage 1 (5x5)   : {p1}")
@@ -376,6 +393,10 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--seed", type=int, default=0)
     pc.add_argument("--no-reset-value-head", action="store_true",
                     help="Disable value-head reset on stage transition.")
+    pc.add_argument("--features-dim", type=int, default=128,
+                    help="Feature extractor output dim (try 256 for larger model).")
+    pc.add_argument("--no-obstacle-random", action="store_true",
+                    help="Disable obstacle count randomization in stage 3.")
     pc.set_defaults(func=cmd_curriculum)
 
     pn = sub.add_parser("no-curriculum",

@@ -10,7 +10,12 @@ __pycache__/
 .vscode/
 .DS_Store
 
-# training artifacts (regenerable)
-data/
+# training artifacts (logs are regenerable; data/ is committed for reproducibility)
 log/
 *.log
+
+# scratchpad files
+.relatorio_draft.md
+
+# Claude Code local config
+.claude/
