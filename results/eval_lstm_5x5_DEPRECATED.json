@@ -1,0 +1,53 @@
+[
+  {
+    "size": 5,
+    "model": "ppo_cpp_5_3_100_1000000_20260507_094804_stage1.zip",
+    "episodes": 100,
+    "deterministic": false,
+    "full_coverage_rate_pct": 97.0,
+    "coverage_mean_pct": 99.81818181818181,
+    "coverage_std_pct": 1.0984587248722335,
+    "coverage_min_pct": 90.9090909090909,
+    "coverage_max_pct": 100.0,
+    "steps_mean": 25.91,
+    "steps_std": 13.22202329448863,
+    "steps_min": 21,
+    "steps_max": 100,
+    "repeat_ratio_mean": 0.1179001259955539,
+    "repeat_ratio_std": 0.11663128092710952
+  },
+  {
+    "size": 10,
+    "model": "ppo_cpp_10_12_600_4000000_20260507_101712_stage2.zip",
+    "episodes": 100,
+    "deterministic": false,
+    "full_coverage_rate_pct": 77.0,
+    "coverage_mean_pct": 99.59090909090908,
+    "coverage_std_pct": 0.9164475069843608,
+    "coverage_min_pct": 95.45454545454545,
+    "coverage_max_pct": 100.0,
+    "steps_mean": 385.66,
+    "steps_std": 152.23785468798488,
+    "steps_min": 135,
+    "steps_max": 600,
+    "repeat_ratio_mean": 0.6288461143262747,
+    "repeat_ratio_std": 0.10564956549284625
+  },
+  {
+    "size": 20,
+    "model": "ppo_cpp_20_50_2400_8000000_20260507_135138_stage3.zip",
+    "episodes": 100,
+    "deterministic": false,
+    "full_coverage_rate_pct": 19.0,
+    "coverage_mean_pct": 97.85714285714288,
+    "coverage_std_pct": 9.043252078940702,
+    "coverage_min_pct": 27.714285714285715,
+    "coverage_max_pct": 100.0,
+    "steps_mean": 2276.65,
+    "steps_std": 303.134668917958,
+    "steps_min": 1098,
+    "steps_max": 2400,
+    "repeat_ratio_mean": 0.7402027948715956,
+    "repeat_ratio_std": 0.1322725862353396
+  }
+]
