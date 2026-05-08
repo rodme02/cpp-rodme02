@@ -51,11 +51,19 @@ class GridWorldCPPEnv(gym.Env):
         shaping_gamma: float = 0.995,
         shaping_scale: float = 1.0,
         obs_quantity_range: Optional[Tuple[int, int]] = None,
+        enforce_connectivity: bool = True,
     ):
         self.size = size
         self.window_size = 512
         self.obs_quantity = obs_quantity
         self.obs_quantity_range = obs_quantity_range
+        # Quando True, descarta layouts com bolsões inalcançáveis no reset()
+        # (rejection sampling) — solução para o teto estrutural de §4.4.
+        # Quando False, comportamento idêntico ao upstream original (qualquer
+        # layout aleatório é aceito) — usado para validar que a política
+        # treinada com rejection ainda atinge o teto estrutural na distribuição
+        # legacy.
+        self.enforce_connectivity = enforce_connectivity
         self.obstacles_locations = []
         self.count_steps = 0
         self.max_steps = max_steps
@@ -388,12 +396,15 @@ class GridWorldCPPEnv(gym.Env):
         else:
             target_quantity = self.obs_quantity
 
-        # Rejection sampling: gera layouts até encontrar um onde TODAS as
-        # células livres sejam alcançáveis a partir da posição do agente.
-        # Layouts com bolsões impõem teto estrutural (oracle perfect-info bate
-        # exatamente o mesmo platô que o RL), então mantê-los na distribuição
-        # apenas adiciona ruído indistinguível de overfit ao problema.
-        max_layout_resamples = 200
+        # Rejection sampling (quando enforce_connectivity=True): gera layouts
+        # até encontrar um onde TODAS as células livres sejam alcançáveis a
+        # partir da posição do agente. Layouts com bolsões impõem teto
+        # estrutural (oracle perfect-info bate exatamente o mesmo platô que
+        # o RL), então mantê-los na distribuição apenas adiciona ruído
+        # indistinguível de overfit ao problema.
+        # Quando enforce_connectivity=False, comportamento idêntico ao
+        # upstream original (qualquer layout é aceito).
+        max_layout_resamples = 200 if self.enforce_connectivity else 1
         agent_tuple = (-1, -1)
         for resample in range(max_layout_resamples):
             self.obstacles_locations = []
@@ -415,6 +426,8 @@ class GridWorldCPPEnv(gym.Env):
                     self._obstacles_set.add(cand_tuple)
                 attempts += 1
 
+            if not self.enforce_connectivity:
+                break
             if self._all_free_cells_reachable(agent_tuple):
                 break
         # Se max_layout_resamples for esgotado (extremamente raro nos ranges

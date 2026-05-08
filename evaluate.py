@@ -49,7 +49,7 @@ SIZE_DEFAULTS = {
 
 
 def evaluate(model_path: str, size: int, episodes: int, seed: int,
-             deterministic: bool) -> dict:
+             deterministic: bool, enforce_connectivity: bool = True) -> dict:
     set_global_seed(seed)
     cfg = SIZE_DEFAULTS.get(size) or {
         "obs_quantity": max(1, int(0.12 * size * size)),
@@ -60,6 +60,7 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
         obs_quantity=cfg["obs_quantity"],
         max_steps=cfg["max_steps"],
         render_mode="rgb_array",
+        enforce_connectivity=enforce_connectivity,
     )
     model = PPO.load(model_path, device="cpu")
 
@@ -88,6 +89,7 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
         "model": os.path.basename(model_path),
         "episodes": episodes,
         "deterministic": deterministic,
+        "enforce_connectivity": enforce_connectivity,
         "full_coverage_rate_pct": 100.0 * full / episodes,
         "coverage_mean_pct": 100.0 * cov.mean(),
         "coverage_std_pct": 100.0 * cov.std(),
@@ -110,17 +112,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=10_000)
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--out", type=str, default=None)
+    p.add_argument("--no-enforce-connectivity", action="store_true",
+                   help="Avalia na distribuição legacy (sem rejection sampling).")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     rows: List[dict] = []
+    enforce_conn = not args.no_enforce_connectivity
     for size_str, model_path in args.pair:
         size = int(size_str)
-        print(f"\n>>> Evaluating size={size}  model={model_path}")
+        print(f"\n>>> Evaluating size={size}  model={model_path}  "
+              f"enforce_conn={enforce_conn}")
         row = evaluate(model_path, size, args.episodes, args.seed,
-                       args.deterministic)
+                       args.deterministic, enforce_connectivity=enforce_conn)
         rows.append(row)
         print(f"   full coverage : {row['full_coverage_rate_pct']:.2f}%")
         print(f"   avg coverage  : {row['coverage_mean_pct']:.2f}% "

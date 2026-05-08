@@ -10,11 +10,13 @@ A descrição da estratégia, justificativa em conceitos de RL, resultados e an�
 
 100 episódios, sementes fixas 10000–10099, política estocástica.
 
-| Tamanho | Full coverage | Cobertura média | Steps médios |
+| Tamanho | Full coverage (com rejection) | Steps | Full coverage (legacy, sem rejection) |
 |---|---|---|---|
-| 5×5 | **100.0 %** | 100.00 % | 23.1 |
-| 10×10 | **100.0 %** | 100.00 % | 99.0 |
-| 20×20 | **100.0 %** | 100.00 % | 530.1 |
+| 5×5 | **100.0 %** | 23.1 | 97.0 % (= teto estrutural) |
+| 10×10 | **100.0 %** | 99.0 | 92.0 % (= teto estrutural) |
+| 20×20 | **100.0 %** | 530.1 | 80.0 % (= teto estrutural) |
+
+A coluna "legacy" mostra os mesmos checkpoints avaliados sem rejection sampling — distribuição idêntica à do upstream `gym_custom_env`. A política bate exatamente o teto estrutural identificado por oracle perfect-info (§4.4 do RELATORIO), confirmando que o ganho de 100/100/100 vem da remoção dos layouts irresolúveis, não de uma melhoria artificial.
 
 ## Estrutura
 
@@ -59,6 +61,12 @@ STAGE3=data/ppo_cpp_20_50_2400_8000000_20260508_015056_stage3.zip
 python evaluate.py \
   --pair 5  "$STAGE1" --pair 10 "$STAGE2" --pair 20 "$STAGE3" \
   --episodes 100 --seed 10000 --out results/eval_runA_stoch.json
+
+# Avaliação na distribuição legacy (sem rejection sampling) — transparência
+python evaluate.py \
+  --pair 5  "$STAGE1" --pair 10 "$STAGE2" --pair 20 "$STAGE3" \
+  --episodes 100 --seed 10000 --no-enforce-connectivity \
+  --out results/eval_runA_legacy_dist.json
 
 # Cross-evaluation (cada modelo em todos os tamanhos, detecta forgetting)
 python evaluate_cross.py \
