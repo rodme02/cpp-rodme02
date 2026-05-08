@@ -197,12 +197,17 @@ def train_stage(
         # and the weights load directly.
         print(f"Loading weights from {init_model}")
         # We have to drop unsupported kwargs that load() doesn't accept.
+        # custom_objects override garante compat com checkpoints cuja
+        # obs_space serializada use nomes legacy (ex.: `global_map` antes
+        # do rename para `visited_pooled`). O env atual produz a obs com
+        # nomes novos; SB3 usa o env override em vez do blob picklado.
         model = PPO.load(
             init_model,
             env=env,
             device="cpu",
             custom_objects={"learning_rate": kwargs["learning_rate"],
-                            "clip_range": kwargs["clip_range"]},
+                            "clip_range": kwargs["clip_range"],
+                            "observation_space": env.observation_space},
         )
         if ent_coef is not None:
             model.ent_coef = ent_coef
@@ -303,7 +308,6 @@ def cmd_test(args):
     _register_env()
     model_path = _resolve_model_path(args.model)
     print(f"Loading model: {model_path}")
-    model = PPO.load(model_path, device="cpu")
 
     cfg = _config_for_size(args.size)
     env = GridWorldCPPEnv(
@@ -311,6 +315,11 @@ def cmd_test(args):
         obs_quantity=cfg["obs_quantity"],
         max_steps=cfg["max_steps"],
         render_mode="rgb_array",
+    )
+    # custom_objects garante compat com obs_space serializada legacy.
+    model = PPO.load(
+        model_path, device="cpu",
+        custom_objects={"observation_space": env.observation_space},
     )
 
     full_count = 0
@@ -347,7 +356,6 @@ def cmd_run(args):
     _register_env()
     model_path = _resolve_model_path(args.model)
     print(f"Loading model: {model_path}")
-    model = PPO.load(model_path, device="cpu")
 
     cfg = _config_for_size(args.size)
     env = GridWorldCPPEnv(
@@ -355,6 +363,11 @@ def cmd_run(args):
         obs_quantity=cfg["obs_quantity"],
         max_steps=cfg["max_steps"],
         render_mode="human",
+    )
+    # custom_objects garante compat com obs_space serializada legacy.
+    model = PPO.load(
+        model_path, device="cpu",
+        custom_objects={"observation_space": env.observation_space},
     )
 
     obs, info = env.reset(seed=args.seed)
