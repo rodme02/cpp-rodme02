@@ -27,7 +27,7 @@ class CPPFeatureExtractor(BaseFeaturesExtractor):
 
     Streams:
       - local_cnn  : 3 canais one-hot na janela KxK egocêntrica
-      - global_cnn : 2 canais (visitadas pooleadas + posição) em FxF fixo
+      - visited_cnn : 2 canais (visitadas pooleadas + posição) em FxF fixo
       - scalar_proj: coverage + frontier(3) + progress + trail(L*2) flatten
 
     Concat final -> features_dim (128 default; teste 256 via kwarg).
@@ -37,17 +37,17 @@ class CPPFeatureExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
 
         local_space = observation_space.spaces["local_map"]
-        global_space = observation_space.spaces["global_map"]
+        visited_space = observation_space.spaces["visited_pooled"]
         trail_space = observation_space.spaces["trail"]
 
         self.local_cnn = _conv_block(local_space.shape[0], 32)
-        self.global_cnn = _conv_block(global_space.shape[0], 32)
+        self.visited_cnn = _conv_block(visited_space.shape[0], 32)
 
         with th.no_grad():
             local_sample = th.as_tensor(local_space.sample()[None]).float()
-            global_sample = th.as_tensor(global_space.sample()[None]).float()
+            visited_sample = th.as_tensor(visited_space.sample()[None]).float()
             local_flat = self.local_cnn(local_sample).shape[1]
-            global_flat = self.global_cnn(global_sample).shape[1]
+            visited_flat = self.visited_cnn(visited_sample).shape[1]
 
         # Escalares concatenados: coverage(1) + frontier(3) + progress(1) + trail(L*2)
         trail_flat = int(np.prod(trail_space.shape))
@@ -56,16 +56,16 @@ class CPPFeatureExtractor(BaseFeaturesExtractor):
         scalar_dim = 16
         spatial_dim = features_dim - scalar_dim
         local_dim = spatial_dim // 2
-        global_dim = spatial_dim - local_dim
+        visited_dim = spatial_dim - local_dim
 
         self.local_proj = nn.Sequential(
             nn.Linear(local_flat, local_dim),
             nn.LayerNorm(local_dim),
             nn.ReLU(inplace=True),
         )
-        self.global_proj = nn.Sequential(
-            nn.Linear(global_flat, global_dim),
-            nn.LayerNorm(global_dim),
+        self.visited_proj = nn.Sequential(
+            nn.Linear(visited_flat, visited_dim),
+            nn.LayerNorm(visited_dim),
             nn.ReLU(inplace=True),
         )
         self.scalar_proj = nn.Sequential(
@@ -76,11 +76,11 @@ class CPPFeatureExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs: dict) -> th.Tensor:
         local_feat = self.local_proj(self.local_cnn(obs["local_map"]))
-        global_feat = self.global_proj(self.global_cnn(obs["global_map"]))
+        visited_feat = self.visited_proj(self.visited_cnn(obs["visited_pooled"]))
         trail_flat = obs["trail"].flatten(start_dim=1)
         scalars = th.cat(
             [obs["coverage"], obs["frontier"], obs["progress"], trail_flat],
             dim=1,
         )
         scalar_feat = self.scalar_proj(scalars)
-        return th.cat([local_feat, global_feat, scalar_feat], dim=1)
+        return th.cat([local_feat, visited_feat, scalar_feat], dim=1)

@@ -62,7 +62,14 @@ def evaluate(model_path: str, size: int, episodes: int, seed: int,
         render_mode="rgb_array",
         enforce_connectivity=enforce_connectivity,
     )
-    model = PPO.load(model_path, device="cpu")
+    # custom_objects override garante compat com checkpoints antigos cuja
+    # obs_space serializada usa nomes legacy (`global_map` em vez de
+    # `visited_pooled`). Os pesos da rede são os mesmos; só os nomes de
+    # chaves do Dict mudam.
+    model = PPO.load(
+        model_path, device="cpu",
+        custom_objects={"observation_space": env.observation_space},
+    )
 
     coverages, steps_list, repeat_ratios = [], [], []
     full = 0

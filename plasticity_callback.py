@@ -28,9 +28,9 @@ class PlasticityCallback(BaseCallback):
         mlp = self.model.policy.mlp_extractor
         return [
             ("local_cnn", fe.local_cnn),
-            ("global_cnn", fe.global_cnn),
+            ("visited_cnn", fe.visited_cnn),
             ("local_proj", fe.local_proj),
-            ("global_proj", fe.global_proj),
+            ("visited_proj", fe.visited_proj),
             ("scalar_proj", fe.scalar_proj),
             ("policy_net", mlp.policy_net),
             ("value_net", mlp.value_net),
@@ -82,9 +82,9 @@ class PlasticityCallback(BaseCallback):
         fe = self.model.policy.features_extractor
         relu_targets = [
             ("local_cnn", fe.local_cnn),
-            ("global_cnn", fe.global_cnn),
+            ("visited_cnn", fe.visited_cnn),
             ("local_proj", fe.local_proj),
-            ("global_proj", fe.global_proj),
+            ("visited_proj", fe.visited_proj),
             ("scalar_proj", fe.scalar_proj),
         ]
         for parent_name, parent in relu_targets:

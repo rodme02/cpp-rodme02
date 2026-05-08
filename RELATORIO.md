@@ -31,7 +31,7 @@ A observação é um `Dict` com 6 componentes, todos com **shape fixo independen
 ```python
 {
   "local_map":  Box(0, 1, shape=(3, 5, 5)),     # detalhe imediato (5×5 egocêntrico)
-  "global_map": Box(0, 1, shape=(2, 8, 8)),     # memória persistente em resolução fixa
+  "visited_pooled": Box(0, 1, shape=(2, 8, 8)),     # memória persistente em resolução fixa
   "coverage":   Box(0, 1, shape=(1,)),          # progresso global
   "frontier":   Box(-1, 1, shape=(3,)),         # direção e distância à fronteira
   "progress":   Box(0, 1, shape=(1,)),          # count_steps / max_steps
@@ -47,14 +47,14 @@ A observação é um `Dict` com 6 componentes, todos com **shape fixo independen
 | 1 | célula livre **já visitada** |
 | 2 | célula livre **ainda não visitada** |
 
-**`global_map` (2, 8, 8)** — mapa pooleado em resolução fixa F = 8:
+**`visited_pooled` (2, 8, 8)** — memória downsampled da própria trajetória do agente em resolução fixa F = 8:
 
 | Canal | Significado |
 |---|---|
-| 0 | máscara de visitadas (max-pool: 1 se qualquer célula da região foi visitada) |
+| 0 | máscara de visitadas (max-pool: 1 se qualquer célula real mapeada para essa célula pooleada já foi visitada pelo agente) |
 | 1 | posição corrente do agente (one-hot na célula pooleada) |
 
-A resolução F é independente do tamanho do grid; cada célula pooleada cobre um número diferente de células reais por tamanho, mas o **shape do tensor é constante**, o que preserva a arquitetura entre estágios.
+**Importante (e por isso o nome foi atualizado de `global_map` para `visited_pooled`):** este tensor **não exibe obstáculos nem células livres não-visitadas**. Ele encoda **somente** `self.visited` (onde o agente esteve) + posição corrente. Em momento algum o tensor expõe `_obstacles_set` ou qualquer célula que o agente não tenha personalmente percorrido. É memória pura da trajetória, similar ao que um hidden state recorrente capturaria, mas em formato CNN-friendly de tamanho fixo (independente do grid). A informação contida é estritamente um subconjunto do que o upstream original já expõe via `agent.x/size, agent.y/size, coverage_ratio` (posição corrente + densidade de visitadas). A escolha de pool em F = 8 é apenas representacional; o conteúdo é a memória do próprio agente.
 
 **`frontier` (3)** — direção `(Δx, Δy)` normalizada e distância BFS normalizada à célula de fronteira mais próxima, onde *fronteira* = célula livre não-visitada adjacente a uma célula visitada (definição clássica de frontier-based exploration em robótica). A BFS opera **apenas sobre o terreno conhecido pelo agente** (`visited ∪ ¬_seen_obstacles`), bloqueando só em obstáculos que o agente já viu pessoalmente; células nunca observadas são tratadas como potencialmente livres (otimismo sob incerteza).
 
@@ -64,14 +64,14 @@ A resolução F é independente do tamanho do grid; cada célula pooleada cobre 
 
 **Justificativa em RL.** A política passa a ver o mundo a partir do referencial do agente, e a transição `s → s'` é a mesma em qualquer ponto do mapa onde a vizinhança local for igual — uma forma de **equivariância translacional**. Se a política for ótima em um patch local 5×5, ela continua ótima em outro patch idêntico em qualquer tamanho de grid, viabilizando transfer entre estágios sem retreinar a CNN do zero. A separação em canais one-hot resolve a confusão semântica de um encoding `{0, 1, 2}` (o ReLU/Conv não trata `2` como "duas vezes mais obstáculo que `1`"); o sinal fica linearmente separável.
 
-**Visibilidade parcial preservada.** O `local_map` mostra apenas as 25 células ao redor do agente; o `global_map` carrega exclusivamente células visitadas; o `frontier` é derivado de uma BFS sobre o terreno conhecido; `progress` e `trail` são meta-informações do próprio agente. Em nenhum momento o agente acessa o conjunto completo de obstáculos do grid via observação ou cálculo derivado.
+**Visibilidade parcial preservada.** O `local_map` mostra apenas as 25 células ao redor do agente; o `visited_pooled` carrega exclusivamente memória de células visitadas pelo agente; o `frontier` é derivado de uma BFS sobre o terreno conhecido; `progress` e `trail` são meta-informações do próprio agente. Em nenhum momento o agente acessa o conjunto completo de obstáculos do grid via observação ou cálculo derivado.
 
 ### 2.2 CNN feature extractor com dois streams
 
 `gymnasium_env/cpp_policy.py` define `CPPFeatureExtractor`:
 
 - **Stream local**: dois `Conv2d(3 → 32 → 32, kernel 3, padding 1)` + GroupNorm + ReLU sobre o `local_map` 3×5×5 → flatten → linear + LayerNorm → 56 features.
-- **Stream global**: dois `Conv2d(2 → 32 → 32, kernel 3, padding 1)` + GroupNorm + ReLU sobre o `global_map` 2×8×8 → flatten → linear + LayerNorm → 56 features.
+- **Stream visitadas**: dois `Conv2d(2 → 32 → 32, kernel 3, padding 1)` + GroupNorm + ReLU sobre o `visited_pooled` 2×8×8 → flatten → linear + LayerNorm → 56 features.
 - **MLP** sobre os 21 escalares (`coverage` + `frontier` + `progress` + `trail` flatten) → 16 features.
 - Concatenação → 128 features para a policy/value head (`net_arch=[64, 64]`).
 
@@ -247,7 +247,7 @@ A política RL atinge o limite empírico em todos os tamanhos. Em steps médios,
 
 ### 3.5 Anti-baseline: pivô abandonado para `RecurrentPPO`+LSTM
 
-Durante a iteração desta entrega, foi tentada uma migração para `RecurrentPPO` (sb3-contrib) com LSTM 2×256, simplificando a observação para `local_map` + posição normalizada (sem `global_map`, sem `frontier`). A motivação era substituir memória externa explícita por hidden state recorrente, conforme apontado em §5 do relatório anterior como "trabalho futuro para escalas maiores".
+Durante a iteração desta entrega, foi tentada uma migração para `RecurrentPPO` (sb3-contrib) com LSTM 2×256, simplificando a observação para `local_map` + posição normalizada (sem `visited_pooled`, sem `frontier`). A motivação era substituir memória externa explícita por hidden state recorrente, conforme apontado em §5 do relatório anterior como "trabalho futuro para escalas maiores".
 
 Resultado experimental:
 
@@ -257,7 +257,7 @@ Resultado experimental:
 | 10×10 | 100.0 % | 77.0 % | −23 pp |
 | 20×20 | 100.0 % | 19.0 % | −81 pp |
 
-Decisão: **revertido**. A simplificação da observação penalizou o 10×10 e o 20×20 muito além do que o LSTM compensou no horizonte de 13 M passos. O trade-off "memória externa explícita (`global_map` 2×8×8 + `frontier`) vs hidden state recorrente" foi vencido pela memória explícita. Hipótese para o gap: o hidden state precisa aprender representações que `global_map` + `frontier` já dão como input, e a CNN over `local_map` 5×5 sozinha tem viés indutivo insuficiente para reconstruí-las em 13 M passos. A evidência foi preservada em `results/eval_lstm_5x5_DEPRECATED.json` para reprodutibilidade.
+Decisão: **revertido**. A simplificação da observação penalizou o 10×10 e o 20×20 muito além do que o LSTM compensou no horizonte de 13 M passos. O trade-off "memória externa explícita (`visited_pooled` 2×8×8 + `frontier`) vs hidden state recorrente" foi vencido pela memória explícita. Hipótese para o gap: o hidden state precisa aprender representações que `visited_pooled` + `frontier` já dão como input, e a CNN over `local_map` 5×5 sozinha tem viés indutivo insuficiente para reconstruí-las em 13 M passos. A evidência foi preservada em `results/eval_lstm_5x5_DEPRECATED.json` para reprodutibilidade.
 
 ## 4. Análise
 
@@ -317,12 +317,12 @@ Para deixar explícita a posição em cada decisão de design vs as regras do ex
 
 | Regra | Status |
 |---|---|
-| **PROIBIDO**: agente acessa mapa completo do ambiente | ✓ Respeitado. `local_map` 5×5 é local; `global_map` é pooling de `self.visited` (só células onde o agente já passou); `frontier` usa BFS sobre `_seen_obstacles` (só obstáculos já vistos pela janela). Em nenhum cálculo o agente acessa `_obstacles_set` direto. |
+| **PROIBIDO**: agente acessa mapa completo do ambiente | ✓ Respeitado. `local_map` 5×5 é local; `visited_pooled` é pooling de `self.visited` (só células onde o agente já passou); `frontier` usa BFS sobre `_seen_obstacles` (só obstáculos já vistos pela janela). Em nenhum cálculo o agente acessa `_obstacles_set` direto. |
 | **OBRIGATÓRIO**: visualização parcial preservada | ✓ Respeitado. Veja item acima. |
 | **OBRIGATÓRIO**: cobertura "próxima de 100%" em 5×5 e 10×10 | ✓ 100 % nos dois (97 %/92 % no env legacy, igual ao teto estrutural). |
 | **PERMITIDO**: alterar arquitetura | ✓ CNN dual-stream em vez do MLP do upstream. |
-| **PERMITIDO**: melhorar representação do estado | ✓ Adições: `local_map` 5×5 (era 3×3 no upstream), `global_map`, `frontier`, `progress`, `trail`. |
-| **PERMITIDO**: coletar informações adicionais durante exploração | ✓ Trail e global_map são exatamente isso — registros do que o próprio agente coletou. |
+| **PERMITIDO**: melhorar representação do estado | ✓ Adições: `local_map` 5×5 (era 3×3 no upstream), `visited_pooled`, `frontier`, `progress`, `trail`. |
+| **PERMITIDO**: coletar informações adicionais durante exploração | ✓ Trail e visited_pooled são exatamente isso — registros do que o próprio agente coletou. |
 | **PERMITIDO**: transfer learning | ✓ Currículo 5×5 → 10×10 → 20×20 com weights herdados. |
 | **PERMITIDO**: outro algoritmo de RL | △ Mantemos PPO; tentamos RecurrentPPO mas regrediu (§3.5). |
 | **PERMITIDO**: alterar reward | ✓ Adicionamos potential-based shaping (Ng 1999); mantém política ótima invariante. |

@@ -10,13 +10,13 @@ import pygame
 #
 # Visibilidade parcial: o agente só vê uma janela 5x5 egocêntrica e o que ele
 # já viu antes (memória persistente). Em particular, todos os cálculos
-# derivados (frontier BFS, global_map) usam APENAS o conjunto
+# derivados (frontier BFS, visited_pooled) usam APENAS o conjunto
 # ``_seen_obstacles`` — obstáculos que entraram na janela do agente em algum
 # step anterior — nunca o conjunto completo de obstáculos do grid.
 #
 # Observation (Dict, todos com shape fixo independente do tamanho do grid):
 #   local_map  (3, 5, 5)   — janela egocêntrica one-hot: obstáculo/visitada/livre
-#   global_map (2, 8, 8)   — memória pooleada: visitadas (max-pool) + posição do agente
+#   visited_pooled (2, 8, 8)   — memória pooleada: visitadas (max-pool) + posição do agente
 #   coverage   (1,)        — fração de células livres visitadas
 #   frontier   (3,)        — Δx, Δy, distância BFS (normalizadas) à fronteira mais próxima
 #   progress   (1,)        — count_steps / max_steps (orçamento de tempo restante)
@@ -92,7 +92,7 @@ class GridWorldCPPEnv(gym.Env):
 
         # Observation:
         #   local_map  (3, K, K)        -> fine-grained egocentric view
-        #   global_map (2, F, F)        -> coarse persistent memory at fixed F
+        #   visited_pooled (2, F, F)        -> coarse persistent memory at fixed F
         #   coverage   (1,)             -> overall coverage scalar
         #   frontier   (3,)             -> Δx, Δy, dist normalizados
         #   progress   (1,)             -> orçamento (count_steps / max_steps)
@@ -105,7 +105,7 @@ class GridWorldCPPEnv(gym.Env):
                 shape=(3, self.K, self.K),
                 dtype=np.float32,
             ),
-            "global_map": gym.spaces.Box(
+            "visited_pooled": gym.spaces.Box(
                 low=0.0,
                 high=1.0,
                 shape=(2, self.F, self.F),
@@ -253,7 +253,7 @@ class GridWorldCPPEnv(gym.Env):
             return 0.0
         return -self.shaping_scale * dist_raw
 
-    def _build_global_map(self) -> np.ndarray:
+    def _build_visited_pooled(self) -> np.ndarray:
         """Pooled persistent memory at fixed resolution (2, F, F).
 
         Channel 0: visited mask, max-pooled — a pooled cell is 1 if any
@@ -334,7 +334,7 @@ class GridWorldCPPEnv(gym.Env):
         progress = (self.count_steps / max(1, self.max_steps)) if self.max_steps > 0 else 0.0
         return {
             "local_map": self._build_local_map(),
-            "global_map": self._build_global_map(),
+            "visited_pooled": self._build_visited_pooled(),
             "coverage": np.array([self.coverage_ratio], dtype=np.float32),
             "frontier": np.array([dx, dy, dist_norm], dtype=np.float32),
             "progress": np.array([min(1.0, progress)], dtype=np.float32),
