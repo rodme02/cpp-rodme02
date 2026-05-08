@@ -35,7 +35,7 @@ A coluna "legacy" mostra os mesmos checkpoints avaliados sem rejection sampling 
 ├── evaluate_cross.py            # cross-evaluation (modelo × tamanho)
 ├── oracle.py                    # oracle frontier-following + connectivity check
 ├── oracle_sweep.py              # sweep do teto estrutural por densidade
-├── make_plots.py                # curves | bars | ablation | plasticity | cross | all
+├── make_plots.py                # curves | bars | plasticity | cross | all
 ├── data/                        # checkpoints (gerados no treino)
 ├── log/                         # tensorboard + CSV (gerados no treino)
 └── results/

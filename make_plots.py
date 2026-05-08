@@ -2,12 +2,10 @@
 
 Subcomandos:
   curves      - curva de aprendizado de um treino (progress.csv)
-  ablation    - barras comparando v1 / v2 / v3 (eval JSONs)
   bars        - barras de cobertura por tamanho do grid (eval JSON)
-  variants    - comparação de variantes de recipe (full + steps)
   plasticity  - curvas de dormant ratio, weight norm, stable rank (3 estágios)
   cross       - matriz de cross-evaluation (modelo × tamanho)
-  all         - curves + bars + ablation + plasticity + cross
+  all         - curves + bars + plasticity + cross
 """
 from __future__ import annotations
 
@@ -86,86 +84,6 @@ def cmd_bars(args: argparse.Namespace) -> None:
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     out = os.path.join(FIG_DIR, "coverage_bars.png")
-    fig.savefig(out, dpi=130)
-    plt.close(fig)
-    print(f"wrote {out}")
-
-
-def _v1_combined() -> Dict[int, dict]:
-    out: Dict[int, dict] = {}
-    for size, fn in [(5, "v1_eval_stage1_stoch.json"),
-                     (10, "v1_eval_stage2_stoch.json")]:
-        path = os.path.join(RESULTS, fn)
-        if os.path.isfile(path):
-            out[size] = _load(path)[0]
-    return out
-
-
-def _v2_combined() -> Dict[int, dict]:
-    out: Dict[int, dict] = {}
-    for size, fn in [(5, "v2_eval_stage1_stoch.json")]:
-        path = os.path.join(RESULTS, fn)
-        if os.path.isfile(path):
-            out[size] = _load(path)[0]
-    legacy = os.path.join(RESULTS, "eval_v2_stoch.json")
-    if os.path.isfile(legacy):
-        for row in _load(legacy):
-            out[row["size"]] = row
-    return out
-
-
-def _by_size(path: str) -> Dict[int, dict]:
-    if not os.path.isfile(path):
-        return {}
-    return {row["size"]: row for row in _load(path)}
-
-
-def cmd_ablation(args: argparse.Namespace) -> None:
-    os.makedirs(FIG_DIR, exist_ok=True)
-    data = {
-        "v1": _v1_combined(),
-        "v2": _v2_combined(),
-        "v3": _by_size(os.path.join(RESULTS, "eval_p0p1p2_stoch.json")),
-    }
-    sizes = sorted({s for v in data.values() for s in v.keys()}) or [5, 10, 20]
-    versions = [v for v in ("v1", "v2", "v3") if data[v]]
-
-    metrics = [
-        ("full_coverage_rate_pct", "Full coverage rate (%)"),
-        ("coverage_mean_pct", "Cobertura média (%)"),
-    ]
-    colors = {"v1": "#cbd5e8", "v2": "#67a9cf", "v3": "#1f6db8"}
-    labels = {
-        "v1": "v1: só local_map",
-        "v2": "v2: + global_map",
-        "v3": "v3: + frontier + shaping",
-    }
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
-    n = max(1, len(versions))
-    width = 0.8 / n
-    for ax, (metric, title) in zip(axes, metrics):
-        x = np.arange(len(sizes))
-        for k, ver in enumerate(versions):
-            offset = (k - (n - 1) / 2) * width
-            vals = [data[ver].get(s, {}).get(metric, np.nan) for s in sizes]
-            ax.bar(x + offset, vals, width, label=labels[ver],
-                   color=colors[ver])
-            for xi, v in zip(x + offset, vals):
-                if not np.isnan(v):
-                    ax.text(xi, v + 1, f"{v:.1f}", ha="center",
-                            va="bottom", fontsize=8)
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"{s}x{s}" for s in sizes])
-        ax.set_ylim(0, 108)
-        ax.set_ylabel("%")
-        ax.set_title(title)
-        ax.grid(axis="y", alpha=0.3)
-        ax.legend(fontsize=9, loc="lower left" if "média" in title else "lower right")
-
-    fig.suptitle("Ablação dos três incrementos (100 eps estocástico)", fontsize=12)
-    fig.tight_layout()
-    out = os.path.join(FIG_DIR, "ablation_comparison.png")
     fig.savefig(out, dpi=130)
     plt.close(fig)
     print(f"wrote {out}")
@@ -283,59 +201,10 @@ def cmd_cross(args: argparse.Namespace) -> None:
     print(f"wrote {out}")
 
 
-def cmd_variants(args: argparse.Namespace) -> None:
-    """Bar chart das variantes de recipe (full coverage e steps por tamanho)."""
-    os.makedirs(FIG_DIR, exist_ok=True)
-    runs = [
-        ("Recipe atual (wd=1e-4, F=8)", "results/eval_p0p1p2_stoch.json", "#1f77b4"),
-        ("wd=5e-4",                     "results/eval_p3_wd5e4_stoch.json", "#2ca02c"),
-        ("F=16",                        "results/eval_p3b_F16_stoch.json",  "#d62728"),
-    ]
-    sizes = [5, 10, 20]
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    n = len(runs)
-    w = 0.8 / n
-    x = np.arange(len(sizes))
-
-    for i, (label, path, color) in enumerate(runs):
-        rows = _by_size(path)
-        full = [rows.get(s, {}).get("full_coverage_rate_pct", np.nan) for s in sizes]
-        steps = [rows.get(s, {}).get("steps_mean", np.nan) for s in sizes]
-        offset = (i - (n - 1) / 2) * w
-        axes[0].bar(x + offset, full, w, label=label, color=color)
-        axes[1].bar(x + offset, steps, w, label=label, color=color)
-        for xi, v in zip(x + offset, full):
-            if not np.isnan(v):
-                axes[0].text(xi, v + 1, f"{v:.0f}", ha="center", va="bottom", fontsize=8)
-        for xi, v in zip(x + offset, steps):
-            if not np.isnan(v):
-                axes[1].text(xi, v + max(steps) * 0.01, f"{v:.0f}", ha="center", va="bottom", fontsize=8)
-
-    for ax, (ylab, title) in zip(axes,
-                                  [("Full coverage rate (%)", "Full coverage rate"),
-                                   ("Steps médios por episódio", "Steps médios (menor = mais eficiente)")]):
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"{s}×{s}" for s in sizes])
-        ax.set_ylabel(ylab)
-        ax.set_title(title)
-        ax.grid(axis="y", alpha=0.3)
-        ax.legend(fontsize=8, loc="best")
-    axes[0].set_ylim(0, 110)
-
-    fig.suptitle("Variantes da recipe (100 eps estocástico)", fontsize=12)
-    fig.tight_layout()
-    out = os.path.join(FIG_DIR, "comparison_4runs.png")
-    fig.savefig(out, dpi=130)
-    plt.close(fig)
-    print(f"wrote {out}")
-
-
 def cmd_all(args: argparse.Namespace) -> None:
     cmd_curves(args)
     if args.eval_json and os.path.isfile(args.eval_json):
         cmd_bars(args)
-    cmd_ablation(args)
     if args.log_dirs:
         cmd_plasticity(args)
     if args.cross_json and os.path.isfile(args.cross_json):
@@ -355,9 +224,6 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--eval-json", required=True)
     pb.set_defaults(func=cmd_bars)
 
-    pa = sub.add_parser("ablation", help="ablação v1/v2/v3")
-    pa.set_defaults(func=cmd_ablation)
-
     pp = sub.add_parser("plasticity", help="curvas de plasticidade (3 estágios)")
     pp.add_argument("--log-dirs", nargs="+", required=True,
                     help="Pastas de log de cada estágio, em ordem")
@@ -367,10 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     pcr.add_argument("--cross-json", required=True)
     pcr.set_defaults(func=cmd_cross)
 
-    pv = sub.add_parser("variants", help="comparação de variantes de recipe")
-    pv.set_defaults(func=cmd_variants)
-
-    pall = sub.add_parser("all", help="curves + bars + ablation + plasticity + cross")
+    pall = sub.add_parser("all", help="curves + bars + plasticity + cross")
     pall.add_argument("--log-dirs", nargs="+", default=[])
     pall.add_argument("--eval-json", type=str, default=None)
     pall.add_argument("--cross-json", type=str, default=None)
