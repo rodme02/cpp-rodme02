@@ -1,3 +1,4 @@
+import warnings
 from collections import deque
 from typing import Optional, Tuple
 
@@ -5,6 +6,21 @@ import numpy as np
 import gymnasium as gym
 
 import pygame
+
+# Probe pygame.font opcionalmente. Em algumas instalações (ex.: pygame 2.6.1
+# em Python 3.14 sem libfreetype no momento do build) o módulo pygame.font
+# não importa. Ao acessar pygame.font.X depois, pygame emite um RuntimeWarning
+# barulhento por chamada de render. Probamos uma vez aqui e silenciamos:
+# se font estiver indisponível, o overlay textual de coverage é simplesmente
+# omitido (já era opcional via try/except no _render_frame).
+try:
+    import pygame.font as _pygame_font  # noqa: F401
+    _PYGAME_FONT_OK = True
+except (ImportError, ModuleNotFoundError):
+    _PYGAME_FONT_OK = False
+    warnings.filterwarnings(
+        "ignore", category=RuntimeWarning, message=r"use font: .*"
+    )
 
 # Coverage Path Planning environment.
 #
@@ -582,16 +598,18 @@ class GridWorldCPPEnv(gym.Env):
             pix_square_size / 3,
         )
 
-        # Coverage info overlay (skip silently if pygame.font is unavailable).
-        try:
-            font = pygame.font.SysFont(None, 24)
-            coverage_text = font.render(
-                f"Coverage: {self.coverage_ratio:.1%} | Steps: {self.count_steps}",
-                True, (0, 0, 0)
-            )
-            canvas.blit(coverage_text, (5, 5))
-        except (NotImplementedError, AttributeError):
-            pass
+        # Coverage info overlay (omitido se pygame.font não estiver disponível
+        # — ver probe no topo do módulo).
+        if _PYGAME_FONT_OK:
+            try:
+                font = pygame.font.SysFont(None, 24)
+                coverage_text = font.render(
+                    f"Coverage: {self.coverage_ratio:.1%} | Steps: {self.count_steps}",
+                    True, (0, 0, 0)
+                )
+                canvas.blit(coverage_text, (5, 5))
+            except (NotImplementedError, AttributeError):
+                pass
 
         # Draw gridlines
         for x in range(self.size + 1):
